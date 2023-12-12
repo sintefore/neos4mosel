@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+
+[project]
+dynamic = ["version"]
+name = "neos4mosel"
+description = "mosel interface to NEOS solvers"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+	{name = "Michal Kaut", email = "Michal.Kaut@sintef.no"}
+]
+
+dependencies = [
+	"keyring",
+	"xmlrpc"
+]
+
+[project.urls]
+"Homepage" = "https://gitlab.sintef.no/mkaut/neos4mosel"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/nemos/version.py"
+
+#[tool.hatch.build]
+#include = [
+	#"examples/*"
+#]
+
+#[tool.hatch.build.targets.sdist]
+#exclude = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nemos"]
+
+[project.scripts]
+hyopt = "nemos.nemos_cli:main"
