@@ -4,11 +4,26 @@ This provides a wrapper for [https://neos-server.org/neos/solvers/](NEOS Server)
 It is based on the [official python client](https://github.com/NEOS-Server/PythonClient), but adds support for Mosel format and also stored credentials.
 
 ## Installation
-The package is pip-installable from the git repository or from a local clone.
+The package is pip-installable from its gitlab repository or from a local clone.
 
-The package creates an executable/binary file `nemos`, which can be used as a solver in mosel models using the `nlsolv` model. The minimal code for using it in Mosel, assuming that the `nemos` binary is in the PATH, is:
+### Pip-install from gitlab
+
+There are two options to install from the gitlab repository.
+The first one is using HTTPs and requires a token - this should work without further configuration on Windows:
+
+```console
+pip install git+https://gitlab.sintef.no/mkaut/codes/neos4mosel.git
+```
+
+An alternative is using SSH, but this requires a certificate registered at gitlab.sintef.no:
+
+```console
+pip install git+ssh://git@gitlab.sintef.no/mkaut/codes/neos4mosel.git
+```
 
 ## Usage
+
+The package creates an executable/binary file `nemos`, which can be used as a solver in mosel models using the `nlsolv` model. The minimal code for using it in Mosel, assuming that the `nemos` binary is in the PATH, is:
 
 ```
 using nlsolv
@@ -64,3 +79,18 @@ nemos --del-cred
 ```
 
 The first command asks for username and password, while the last command removes the password from the keyring and the username from the config file.
+
+
+### Stand-alone usage
+
+While `nemos` is meant to be called from Mosel, it can solve a standalone NL file as well.
+For this, simply run
+
+```
+nemos problem.nl
+```
+
+and there should appear `problem.sol` in the same directory as `problem.nl`.
+Solver options can be provided using environmental variable `neos_options`.
+
+To avoid warning about wrong syntax of input arguments, add dummy options `-s -e` to the call.

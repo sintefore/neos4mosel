@@ -170,7 +170,6 @@ def solve_nl_file(nl_file: str):
 	
 	# user authentication
 	email = odict.get('email', c_user.get('email', ''))
-	# TODO: if it exists in odict, remove it from there and from `options`!
 	if email == '':
 		logger.error("NEOS requires email for problem submissions, please specify it.")
 		sys.exit(1)
@@ -183,13 +182,15 @@ def solve_nl_file(nl_file: str):
 		if pwd is None:
 			logger.warning(f"No password found in the keyring for NEOS user {user}!")
 			logger.warning(" -> submitting without authentication")
+		else:
+			logger.info(f"Submitting as NEOS user `{user}`.")
 	
 	## creating the XML file
 	# read the NL file
 	with open(nl_file, 'r') as f:
 		nl_mod_str = f.read()
 	# options, one per line, excluding options ment for this script
-	neos_options = [opt for opt in options if opt.split('=')[0].strip().lower() not in {'category', 'solver', 'email', 'user'}]
+	neos_options = [opt for opt in options if opt.split('=')[0].strip().lower() not in {'category', 'solver', 'priority', 'email', 'user'}]
 	opt_str = '\n'.join(neos_options)
 
 	neos_xml = f"""\
@@ -291,7 +292,7 @@ def main(argv=None):
 	if len(args.args) > 0:
 		# called from Mosel
 		if not(args.s and args.e):
-			logger.warning(f"Unexpected format of Mosel solver argumenents: {argv}")
+			logger.warning(f"Unexpected format of Mosel solver arguments: {argv}")
 		nl_file = args.args[0]
 		solve_nl_file(nl_file)
 	else:
