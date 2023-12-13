@@ -16,7 +16,8 @@ authors = [
 
 dependencies = [
 	"keyring",
-	"xmlrpc"
+	"platformdirs",
+	"pwinput"
 ]
 
 [project.urls]
@@ -40,4 +41,4 @@ version-file = "src/nemos/version.py"
 packages = ["src/nemos"]
 
 [project.scripts]
-hyopt = "nemos.nemos_cli:main"
+nemos = "nemos.nemos_cli:main"

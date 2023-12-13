@@ -1,0 +1,10 @@
+# generic files
+/.*
+__pycache__
+*.code-workspace
+
+# python-packaging related
+src/nemos/version.py
+/dist/*
+
+# project-generated files
