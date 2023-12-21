@@ -8,16 +8,12 @@ The package is pip-installable from its gitlab repository or from a local clone.
 
 ### Pip-install from gitlab
 
-There are two options to install from the gitlab repository.
-The first one is using HTTPs and requires a token - this should work without further configuration on Windows:
+There are two options to install directly from the [gitlab repository](https://gitlab.sintef.no/mkaut/codes/neos4mosel).
+The first one is using HTTPs and requires a token registerd at gitlab, while the other is using SSH and requires a registered certificate instead:
 
 ```console
 pip install git+https://gitlab.sintef.no/mkaut/codes/neos4mosel.git
-```
 
-An alternative is using SSH, but this requires a certificate registered at gitlab.sintef.no:
-
-```console
 pip install git+ssh://git@gitlab.sintef.no/mkaut/codes/neos4mosel.git
 ```
 
@@ -26,18 +22,19 @@ pip install git+ssh://git@gitlab.sintef.no/mkaut/codes/neos4mosel.git
 The package creates an executable/binary file `nemos`, which can be used as a solver in mosel models using the `nlsolv` model. The minimal code for using it in Mosel, assuming that the `nemos` binary is in the PATH, is:
 
 ```
-using nlsolv
-setparam("nl_solver", "neos")
-setparam("nl_path, "nemos")
-setparam("nl_binary", false)
+uses nlsolv
+setparam("NL_solver", "neos")       ! solver identifier
+setparam("NL_solverpath", "nemos")  ! name of the solver binary - must be in PATH
+setparam("NL_binary", false)        ! NEOS XML does not work with the default binary format
 ```
 
 The last parameter is required because the XML format does not support model in binary format.
+Also note that names of Mosel parameters are not case sensitive, so "nl_solver" etc. works as well.
 
 Solver-specific parameters can be passed to the solver using
 
 ```
-setparam("nl_option", SOLVER_OPTIONS)
+setparam("NL_options", SOLVER_OPTIONS)
 ```
 
 where `SOLVEROPTIONS` is a space-separated list of key=value entries.
@@ -53,6 +50,10 @@ In addition to the solver parameters, the list can include the following paramet
 	- it is also possible to register the email, see below
 - `user` - NEOS username (optional)
 	- must belong to credentials registered in system keyring
+
+Run `nemos --neos-info` to get a list of supported solvers and problem categories.
+Note that this includes only combinations usable from Mosel, i.e., supporting the AMPL NL input.
+Moreover, the list does _not_ include Gurobi, since this cannot be used via the XML-RPC API.
 
 
 ### Authentication

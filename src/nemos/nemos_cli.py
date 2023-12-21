@@ -10,6 +10,7 @@ import xmlrpc.client
 from platformdirs import PlatformDirs
 import json
 import time
+from collections import defaultdict
 
 #import subprocess
 
@@ -81,6 +82,27 @@ def get_config() -> dict:
 	return config
 
 
+def get_neos_api(server_uri: str=None) -> xmlrpc.client.ServerProxy:
+	'''
+	connect to the NEOS XML-RPC API and return the connection object
+	'''
+	config = get_config()
+	c_neos = config.get('neos', None)
+	assert c_neos, 'config file should always exist and have a "neos" section'
+
+	server = server_uri or c_neos.get('server', None)
+	if not server:
+		logger.error("NEOS server URI not provided!")
+		sys.exit(1)
+	try:
+		neos = xmlrpc.client.ServerProxy(server)
+		neos.ping()
+	except Exception as e:
+		logger.error("Could not reach the NEOS server: ", e)
+		sys.exit(1)
+	return neos
+
+
 def solve_nl_file(nl_file: str):
 	'''
 	Solve problem given by an .nl file on NEOS
@@ -122,16 +144,7 @@ def solve_nl_file(nl_file: str):
 
 	## NEOS setup
 	# server
-	server = odict.get('server', c_neos.get('server', None))
-	if not server:
-		logger.error("NEOS server URI not provided!")
-		sys.exit(1)
-	try:
-		neos = xmlrpc.client.ServerProxy(server)
-		neos.ping()
-	except Exception as e:
-		logger.error("Could not reach the NEOS server: ", e)
-		sys.exit(1)
+	neos = get_neos_api(odict.get('server', None))
 	#
 	# problem category
 	if 'category' in odict:
@@ -175,6 +188,7 @@ def solve_nl_file(nl_file: str):
 		sys.exit(1)
 	#
 	user = odict.get('user', c_user.get('user', ''))
+	pwd = None
 	# TODO: if it exists in odict, remove it from there and from `options`!
 	if user != '':
 		# try to get password
@@ -276,11 +290,18 @@ def main(argv=None):
 	parser.add_argument('-s', action='store_true', help=argparse.SUPPRESS)
 	parser.add_argument('-e', action='store_true', help=argparse.SUPPRESS)
 	# credential management
-	parser.add_argument('--email', type=str, help='set email address for NEOS', metavar='EMAIL')
-	parser.add_argument('--show-email', action='store_true', help='show stored NEOS email')
-	parser.add_argument('--set-cred', action='store_true', help='input and store NEOS credentials')
-	parser.add_argument('--show-user', action='store_true', help='show stored NEOS username')
-	parser.add_argument('--del-cred', action='store_true', help='delete stored NEOS credentials')
+	cred = parser.add_argument_group('credential management')
+	cred.add_argument('--email', type=str, help='set email address for NEOS', metavar='EMAIL')
+	cred.add_argument('--show-email', action='store_true', help='show stored NEOS email')
+	cred.add_argument('--set-cred', action='store_true', help='input and store NEOS credentials')
+	cred.add_argument('--show-user', action='store_true', help='show stored NEOS username')
+	cred.add_argument('--del-cred', action='store_true', help='delete stored NEOS credentials')
+	# NEOS solver information
+	neos = parser.add_argument_group('NEOS solver information')
+	neos.add_argument('--categories', action='store_true', help='list supported problem categories, with descriptions')
+	neos.add_argument('--cat-solvers', action='store_true', help='list supported solvers, per problem category')
+	neos.add_argument('--solver-cats', action='store_true', help='list supported problem categories, per solver')
+	neos.add_argument('--neos-info', action='store_true', help='show all the lists above')
 
 	# prepare command line arguments for parse_args
 	# - accepts None - uses sys.argv[1:] in that case
@@ -296,14 +317,51 @@ def main(argv=None):
 		nl_file = args.args[0]
 		solve_nl_file(nl_file)
 	else:
-		# not a Mosel call - should be credential management
-		# - email and (optionally) NEOS username are stored in config
-		# - password for the username is stored in the keyring
+		# not a Mosel call
 		config = get_config()
+		assert 'neos' in config and 'user' in config, 'config file should always include "neos" and "user"'
 		c_neos = config['neos']
 		c_user = config['user']
-		save_config = False
 
+		# NEOS information
+		if args.neos_info:
+			args.categories = True
+			args.cat_solvers = True
+			args.solver_cats = True
+		if args.categories or args.cat_solvers or args.solver_cats:
+			neos = get_neos_api()
+			cat_list = neos.listCategories()     # returns dictionary cat-id -> description
+			solver_comb = neos.listAllSolvers()  # returns list of 'category:solver:inputMethod
+			forbidden_solvers = set(c_neos.get('forbidden_solvers', []))
+			solver_comb_nl = [
+				scl[:2]
+				for sc in solver_comb
+				if (scl := sc.split(':'))[2] == 'NL' and scl[1] not in forbidden_solvers
+			]
+
+			cat_solvers = defaultdict(list)
+			solver_cats = defaultdict(list)
+			for cat, solver in solver_comb_nl:
+				cat_solvers[cat].append(solver)
+				solver_cats[solver].append(cat)
+
+			if args.categories:
+				print(f"\nSupported problem categories:")
+				for cat in cat_solvers.keys():
+					print(f"{cat:<5s} : {cat_list[cat]}")
+			if args.cat_solvers:
+				print(f"\nSolvers per problem category:")
+				for cat, solvers in cat_solvers.items():
+					print(f"{cat:<5s} : {', '.join(sorted(solvers))}")
+			if args.solver_cats:
+				print("\nProblem categories per solver:")
+				for solver, cats in solver_cats.items():
+					print(f"{solver:<11s} : {', '.join(sorted(cats))}")
+			sys.exit(0)
+
+		# remaining options should be for credential management
+		# - email and (optionally) NEOS username are stored in config
+		# - password for the username is stored in the keyring
 		email = c_user.get('email', '')
 		user = c_user.get('user', '')
 		if user != '':
@@ -311,6 +369,7 @@ def main(argv=None):
 		else:
 			cred = None
 
+		save_config = False
 		if args.show_email:
 			if email != '':
 				logger.info(f"Stored NEOS email is `{email}`")
