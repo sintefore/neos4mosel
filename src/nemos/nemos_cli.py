@@ -32,7 +32,7 @@ except:
 	_has_rich = False
 
 
-def default_config() -> dict():
+def default_config() -> dict[str, dict]:
 	'''
 	get default values for the configuration file
 	'''
@@ -49,6 +49,7 @@ def default_config() -> dict():
 			'keyring_id': 'NEOS Server',  # keyring id/name of the NEOS credentials
 		}
 	}
+
 
 def config_file_path() -> Path:
 	'''
@@ -82,9 +83,15 @@ def get_config() -> dict:
 	return config
 
 
-def get_neos_api(server_uri: str=None) -> xmlrpc.client.ServerProxy:
+def get_neos_api(server_uri: str|None=None) -> xmlrpc.client.ServerProxy:
 	'''
 	connect to the NEOS XML-RPC API and return the connection object
+
+	Args:
+		server_uri: if given, use this URI instead of the one from the config file
+
+	Returns:
+		xmlrpc.client.ServerProxy object connected to NEOS
 	'''
 	config = get_config()
 	c_neos = config.get('neos', None)
@@ -103,49 +110,42 @@ def get_neos_api(server_uri: str=None) -> xmlrpc.client.ServerProxy:
 	return neos
 
 
-def solve_nl_file(nl_file: str):
+def parse_neos_options(options_str: str) -> dict[str, str]:
 	'''
-	Solve problem given by an .nl file on NEOS
+	parse NEOS options string into a dictionary
 
-	Solvers options are passed from Mosel via env. variable 'neos_options'!
+	Args:
+		options_str: string with options, e.g. "key1=val1 key2=val2"
+		ignored_keys: set of keys to ignore
 
-	Communication using XML-RPC API
-	- doc: https://neos-server.org/neos/xml-rpc.html
+	All keys are converted to lower case.
+		
+	Returns:
+		dictionary with option key-value pairs
 	'''
+	odict = {
+		parts[0].strip().lower(): parts[1].strip()
+		for o in options_str.split()
+		if (parts := o.split('=', maxsplit=1)) and len(parts) == 2
+	}
+	return odict
 
-	nl_file = Path(nl_file)
-	assert nl_file.is_file(), 'should always hold'
-	# check that we have ASCII NL file (binary is not supported)
-	# - NL file starts with 'g' for ASCII files and 'b' for binary files
-	with open(nl_file, 'rb') as f:
-		id_char = f.read(1).decode()  # reading binary -> have to decode
-	match id_char:
-		case 'b':
-			logger.error(f"NL file `{nl_file}` is in binary format, this is not supported!")
-			logger.info('In Mosel, use `setparam("nl_binary", false)` to switch to ascii format.')
-			sys.exit(1)
-		case 'g':
-			pass  # this is what we want
-		case _:
-			logger.error(f"Could not detect format of NL file {nl_file} - expect problems!")
-	# for testing - copy the NL file to the working dir
-	#shutil.copy(nl_file, './tmp.nl')
 
+def get_neos_config(odict: dict, neos: xmlrpc.client.ServerProxy) -> dict:
+	'''
+	get NEOS server configuration information
+
+	Args:
+		odict: dictionary with NEOS options
+		neos: connected NEOS XML-RPC API object
+
+	Returns:
+		dictionary with NEOS configuration information
+	'''
 	config = get_config()
 	c_neos = config['neos']
 	c_user = config['user']
 
-	options_str = os.environ.get('neos_options', '')
-	# assuming options_str is "key1=val1 key2=val2" etc
-	options = options_str.split()
-	odict = {(o.split('=')[0]).strip().lower():o.split('=', maxsplit=1)[1] for o in options}
-	logging.debug(f"NEOS solver options = {options}")
-	logging.debug(f"NEOS options as dict: {odict}")
-
-	## NEOS setup
-	# server
-	neos = get_neos_api(odict.get('server', None))
-	#
 	# problem category
 	if 'category' in odict:
 		category = odict['category']
@@ -155,10 +155,10 @@ def solve_nl_file(nl_file: str):
 			logger.info(f'Supported values are:')
 			for cat, descr in neos_categories.items():
 				logger.info(f"{cat}: {descr}")
-			sys.exit(1)
+			raise ValueError(f'Unsupported problem category `{category}`')
 	else:
 		category = c_neos['category']
-	#
+
 	# solver
 	if 'solver' in odict:
 		solver = odict['solver']
@@ -169,7 +169,7 @@ def solve_nl_file(nl_file: str):
 		if solver not in cat_solvers_nl:
 			logger.error(f"Solver {solver} is not supported for `{category}` problems with `NL` input.")
 			logger.info("Supported solvers: ", cat_solvers_nl)
-			sys.exit(1)
+			raise ValueError(f"Unsupported solver `{solver}` for category `{category}`")
 	else:
 		solver = c_neos['solver']
 	#
@@ -177,15 +177,14 @@ def solve_nl_file(nl_file: str):
 	if f'{category}:{solver}:NL' not in neos_solvers:
 		logger.error(f"Specified NEOS solver `{category}:{solver}:NL` is not in the list!")
 	logger.info(f"Specified NEOS solver = `{category}:{solver}:NL`")
-	#
+
 	# priority (short or long)
 	priority = odict.get('priority', 'short')
 	
 	# user authentication
 	email = odict.get('email', c_user.get('email', ''))
 	if email == '':
-		logger.error("NEOS requires email for problem submissions, please specify it.")
-		sys.exit(1)
+		raise Exception("NEOS requires email for problem submissions, please specify it.")
 	#
 	user = odict.get('user', c_user.get('user', ''))
 	pwd = None
@@ -198,46 +197,113 @@ def solve_nl_file(nl_file: str):
 			logger.warning(" -> submitting without authentication")
 		else:
 			logger.info(f"Submitting as NEOS user `{user}`.")
+
+	return {
+		'category': category,
+		'solver': solver,
+		'priority': priority,
+		'email': email,
+		'user': user,
+		'pwd': pwd
+	}
 	
-	## creating the XML file
+
+def neos_xml_string(odict: dict, nl_file: str|Path, config: dict) -> str:
+	'''
+	create the NEOS XML string for job submission
+
+	Args:
+		odict: dictionary with NEOS configuration options
+		nl_file: path to the NL file to be solved
+		config: dictionary with NEOS config information
+	
+	Returns:
+		string with the NEOS XML job submission document
+	'''
 	# read the NL file
 	with open(nl_file, 'r') as f:
 		nl_mod_str = f.read()
-	# options, one per line, excluding options ment for this script
-	neos_options = [opt for opt in options if opt.split('=')[0].strip().lower() not in {'category', 'solver', 'priority', 'email', 'user'}]
+
+	# options, one per line, excluding options meant for this script
+	script_options = {'category', 'solver', 'priority', 'email', 'user'}
+	neos_options = [f'{key}={val}' for key, val in odict.items() if key not in script_options]
 	opt_str = '\n'.join(neos_options)
 
 	neos_xml = f"""\
 <document>
-	<category>{category}</category>
-	<solver>{solver}</solver>
+	<category>{config['category']}</category>
+	<solver>{config['solver']}</solver>
 	<inputMethod>NL</inputMethod>
-	<priority>{priority}</priority>
-	<email>{email}</email>
+	<priority>{config['priority']}</priority>
+	<email>{config['email']}</email>
 	<model><![CDATA[{nl_mod_str}]]></model>
 	<options><![CDATA[{opt_str}]]></options>
 	<comments><![CDATA[]]></comments>
 </document>
 """
+
+
+def solve_nl_file(nl_file: str|Path) -> None:
+	'''
+	Solve problem given by an .nl file on NEOS
+
+	Solvers options are passed from Mosel via env. variable 'neos_options'!
+
+	Communication using XML-RPC API
+	- doc: https://neos-server.org/neos/xml-rpc.html
+
+	Args:
+		nl_file: path to the NL file to be solved
+	'''
+
+	nl_file = Path(nl_file)
+	if not nl_file.is_file():
+		raise FileNotFoundError(f"NL file `{nl_file}` not found!")
+	# check that we have ASCII NL file (binary is not supported)
+	# - NL file starts with 'g' for ASCII files and 'b' for binary files
+	with open(nl_file, 'rb') as f:
+		id_char = f.read(1).decode()  # reading binary -> have to decode
+	match id_char:
+		case 'b':
+			raise ValueError(f"""
+				NL file `{nl_file}` is in binary format, this is not supported!
+				In Mosel, use `setparam("nl_binary", false)` to switch to ascii format.
+			""")
+		case 'g':
+			pass  # this is what we want
+		case _:
+			logger.error(f"Could not detect format of NL file {nl_file} - expect problems!")
+	# for testing - copy the NL file to the working dir
+	#shutil.copy(nl_file, './tmp.nl')
+
+	options_str = os.environ.get('neos_options', '')
+	logging.debug(f"NEOS solver options = {options_str}")
+	odict = parse_neos_options(options_str)
+	logging.debug(f"NEOS options as dict: {odict}")
+
+	## NEOS setup
+	neos = get_neos_api(odict.get('server', None))
+	config = get_neos_config(neos)
+	neos_xml = neos_xml_string(odict, nl_file, config)
+
 	# use for testing: save a copy of the XML file to the working dir
 	#with open('tmp.xml', 'w') as f:
 	#	f.write(neos_xml)
 
 	## run the job - code based on https://github.com/NEOS-Server/PythonClient
-	if pwd:
-		assert user != '', 'consistency check'
-		(job_id, job_pwd) = neos.authenticatedSubmitJob(neos_xml, user, pwd)
+	if config['pwd'] is not None:
+		assert config['user'] != '', 'consistency check'
+		job_id, job_pwd = neos.authenticatedSubmitJob(neos_xml, config['user'], config['pwd'])
 	else:
-		(job_id, job_pwd) = neos.submitJob(neos_xml)
+		job_id, job_pwd = neos.submitJob(neos_xml)
 	if job_id == 0:
-		logger.error("NEOS server error: ", job_pwd)
-		sys.exit(1)
+		raise RuntimeError(f"NEOS job submission failed!")
 	logger.info(f"Job submitted to NEOS; job no. = {job_id}, password = {job_pwd}")
 	
 	status = neos.getJobStatus(job_id, job_pwd)
 	assert status in {'Waiting', 'Running', 'Done'}, 'check status'
 
-	if priority == 'short':
+	if config['priority'] == 'short':
 		# only jobs sumbitted with 'short' priority (max 5 minutes)
 		# report running results
 		offset = 0
@@ -275,9 +341,124 @@ def solve_nl_file(nl_file: str):
 		f.write(res.data)
 	
 
-
 # ----------------------------------------------------------------------------
 
+def non_mosel_call(args: argparse.Namespace) -> None:
+	'''
+	handle command line calls that are not from Mosel
+
+	Args:
+		args: parsed command line arguments
+	'''
+	config = get_config()
+	assert 'neos' in config and 'user' in config, 'config file should always include "neos" and "user"'
+	c_neos = config['neos']
+	c_user = config['user']
+
+	# NEOS information
+	if args.neos_info:
+		args.categories = True
+		args.cat_solvers = True
+		args.solver_cats = True
+	if args.categories or args.cat_solvers or args.solver_cats:
+		neos = get_neos_api()
+		cat_list = neos.listCategories()     # returns dictionary cat-id -> description
+		solver_comb = neos.listAllSolvers()  # returns list of 'category:solver:inputMethod
+		forbidden_solvers = set(c_neos.get('forbidden_solvers', []))
+		solver_comb_nl = [
+			scl[:2]
+			for sc in solver_comb
+			if (scl := sc.split(':'))[2] == 'NL' and scl[1] not in forbidden_solvers
+		]
+
+		cat_solvers = defaultdict(list)
+		solver_cats = defaultdict(list)
+		for cat, solver in solver_comb_nl:
+			cat_solvers[cat].append(solver)
+			solver_cats[solver].append(cat)
+
+		if args.categories:
+			print(f"\nSupported problem categories:")
+			for cat in cat_solvers.keys():
+				print(f"{cat:<5s} : {cat_list[cat]}")
+		if args.cat_solvers:
+			print(f"\nSolvers per problem category:")
+			for cat, solvers in cat_solvers.items():
+				print(f"{cat:<5s} : {', '.join(sorted(solvers))}")
+		if args.solver_cats:
+			print("\nProblem categories per solver:")
+			for solver, cats in solver_cats.items():
+				print(f"{solver:<11s} : {', '.join(sorted(cats))}")
+		sys.exit(0)
+
+	# remaining options should be for credential management
+	# - email and (optionally) NEOS username are stored in config
+	# - password for the username is stored in the keyring
+	email = c_user.get('email', '')
+	user = c_user.get('user', '')
+	if user != '':
+		cred = keyring.get_credential(c_user['keyring_id'], user)
+	else:
+		cred = None
+
+	save_config = False
+	if args.show_email:
+		if email != '':
+			logger.info(f"Stored NEOS email is `{email}`")
+		else:
+			logger.info("No email stored for NEOS.")
+	elif args.email:
+		update = True
+		if email != '':
+			if args.email != email:
+				logger.warning(f"There is already a stored email: `{email}`")
+				ans = input('Overwrite it with the `{args.email}`? [Y/n] ')
+				if ans not in {'', 'y', 'Y', 'j', 'J'}:
+					update = False
+			else:
+				logger.info(f"This email is already in the config file.")
+				update = False
+		if update:
+			c_user['email'] = args.email
+			save_config = True
+
+	if args.show_user:
+		if user != '':
+			logger.info(f"Stored NEOS username is `{email}`")
+		else:
+			logger.info("No username stored for NEOS.")
+	elif args.set_cred:
+		update = True
+		if cred:
+			logger.warning(f"There are already stored credentials for NEOS user `{cred.username}`!")
+			ans = input('Delete them and enter new? [Y/n] ')
+			if ans in {'', 'y', 'Y', 'j', 'J'}:
+				keyring.delete_password(c_user['keyring_id'], cred.username)
+			else:
+				update = False
+		if update:
+			user = input('NEOS username: ')
+			while True:
+				pwd = pwinput.pwinput(prompt='NEOS password: ')
+				if len(pwd) >= 9:  # possibly valid password - NEOS requires at least 9 characters
+					break
+			c_user['user'] = user
+			save_config = True
+			keyring.set_password(c_user['keyring_id'], user, pwd)
+	elif args.del_cred:
+		if not cred:
+			logger.warning("No NEOS credentials found - nothing to delete")
+			sys.exit(1)
+		keyring.delete_password(c_user['keyring_id'], cred.username)
+		c_user['user'] = ''
+		save_config = True
+	
+	if save_config:
+		with open(config_file_path(), 'w') as f:
+			json.dump(config, f, indent='\t')
+
+
+# ----------------------------------------------------------------------------
 def main(argv=None):
 	#log_levels = [v.lower() for k,v in logging._levelToName.items() if k > 0]
 	termWidth = shutil.get_terminal_size()[0]
@@ -310,120 +491,16 @@ def main(argv=None):
 		argv = argv.split()
 	args = parser.parse_args(argv)
 
-	if len(args.args) > 0:
-		# called from Mosel
-		if not(args.s and args.e):
-			logger.warning(f"Unexpected format of Mosel solver arguments: {argv}")
-		nl_file = args.args[0]
-		solve_nl_file(nl_file)
-	else:
+	if len(args.args) == 0:
 		# not a Mosel call
-		config = get_config()
-		assert 'neos' in config and 'user' in config, 'config file should always include "neos" and "user"'
-		c_neos = config['neos']
-		c_user = config['user']
+		non_mosel_call(args)
+		return
 
-		# NEOS information
-		if args.neos_info:
-			args.categories = True
-			args.cat_solvers = True
-			args.solver_cats = True
-		if args.categories or args.cat_solvers or args.solver_cats:
-			neos = get_neos_api()
-			cat_list = neos.listCategories()     # returns dictionary cat-id -> description
-			solver_comb = neos.listAllSolvers()  # returns list of 'category:solver:inputMethod
-			forbidden_solvers = set(c_neos.get('forbidden_solvers', []))
-			solver_comb_nl = [
-				scl[:2]
-				for sc in solver_comb
-				if (scl := sc.split(':'))[2] == 'NL' and scl[1] not in forbidden_solvers
-			]
-
-			cat_solvers = defaultdict(list)
-			solver_cats = defaultdict(list)
-			for cat, solver in solver_comb_nl:
-				cat_solvers[cat].append(solver)
-				solver_cats[solver].append(cat)
-
-			if args.categories:
-				print(f"\nSupported problem categories:")
-				for cat in cat_solvers.keys():
-					print(f"{cat:<5s} : {cat_list[cat]}")
-			if args.cat_solvers:
-				print(f"\nSolvers per problem category:")
-				for cat, solvers in cat_solvers.items():
-					print(f"{cat:<5s} : {', '.join(sorted(solvers))}")
-			if args.solver_cats:
-				print("\nProblem categories per solver:")
-				for solver, cats in solver_cats.items():
-					print(f"{solver:<11s} : {', '.join(sorted(cats))}")
-			sys.exit(0)
-
-		# remaining options should be for credential management
-		# - email and (optionally) NEOS username are stored in config
-		# - password for the username is stored in the keyring
-		email = c_user.get('email', '')
-		user = c_user.get('user', '')
-		if user != '':
-			cred = keyring.get_credential(c_user['keyring_id'], user)
-		else:
-			cred = None
-
-		save_config = False
-		if args.show_email:
-			if email != '':
-				logger.info(f"Stored NEOS email is `{email}`")
-			else:
-				logger.info("No email stored for NEOS.")
-		elif args.email:
-			update = True
-			if email != '':
-				if args.email != email:
-					logger.warning(f"There is already a stored email: `{email}`")
-					ans = input('Overwrite it with the `{args.email}`? [Y/n] ')
-					if ans not in {'', 'y', 'Y', 'j', 'J'}:
-						update = False
-				else:
-					logger.info(f"This email is already in the config file.")
-					update = False
-			if update:
-				c_user['email'] = args.email
-				save_config = True
-
-		if args.show_user:
-			if user != '':
-				logger.info(f"Stored NEOS username is `{email}`")
-			else:
-				logger.info("No username stored for NEOS.")
-		elif args.set_cred:
-			update = True
-			if cred:
-				logger.warning(f"There are already stored credentials for NEOS user `{cred.username}`!")
-				ans = input('Delete them and enter new? [Y/n] ')
-				if ans in {'', 'y', 'Y', 'j', 'J'}:
-					keyring.delete_password(c_user['keyring_id'], cred.username)
-				else:
-					update = False
-			if update:
-				user = input('NEOS username: ')
-				while True:
-					pwd = pwinput.pwinput(prompt='NEOS password: ')
-					if len(pwd) >= 9:  # possibly valid password - NEOS requires at least 9 characters
-						break
-				c_user['user'] = user
-				save_config = True
-				keyring.set_password(c_user['keyring_id'], user, pwd)
-		elif args.del_cred:
-			if not cred:
-				logger.warning("No NEOS credentials found - nothing to delete")
-				sys.exit(1)
-			keyring.delete_password(c_user['keyring_id'], cred.username)
-			c_user['user'] = ''
-			save_config = True
-		
-		if save_config:
-			with open(config_file_path(), 'w') as f:
-				json.dump(config, f, indent='\t')
+	# assuming script was called from Mosel
+	if not(args.s and args.e):
+		logger.warning(f"Unexpected format of Mosel solver arguments: {argv}")
+	nl_file = args.args[0]
+	solve_nl_file(nl_file)
 
 
 if __name__ == "__main__":
