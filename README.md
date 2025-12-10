@@ -1,25 +1,27 @@
 # Mosel interface to NEOS solvers using AMPL nl format
 
-This provides a wrapper for [https://neos-server.org/neos/solvers/](NEOS Server)'s [https://neos-server.org/neos/xml-rpc.html](XML-RPC API), for use from Mosel.
-It is based on the [official python client](https://github.com/NEOS-Server/PythonClient), but adds support for Mosel format and also stored credentials.
+This provides a wrapper for [NEOS Server](https://neos-server.org/neos/solvers/)'s [XML-RPC API](https://neos-server.org/neos/xml-rpc.html), for use from FICO Mosel modelling language.
+It is based on the NEOS Server's official [PythonClient](https://github.com/NEOS-Server/PythonClient), but adjusted for Mosel.
+In addition, it has a support for storing of NEOS credentials.
 
 ## Installation
 The package is pip-installable from its gitlab repository or from a local clone.
 
 ### Pip-install from gitlab
 
-There are two options to install directly from the [gitlab repository](https://gitlab.sintef.no/mkaut/codes/neos4mosel).
-The first one is using HTTPs and requires a token registerd at gitlab, while the other is using SSH and requires a registered certificate instead:
+There are two options to install directly from [the github repository](https://gitlab.sintef.no/mkaut/codes/neos4mosel).
+The first one is using HTTPs and requires a token registerd at GitHub, while the other is using SSH and requires a registered certificate instead:
 
 ```console
-pip install git+https://gitlab.sintef.no/mkaut/codes/neos4mosel.git
+pip install git+https://github.com/sintefore/neos4mosel.git
 
-pip install git+ssh://git@gitlab.sintef.no/mkaut/codes/neos4mosel.git
+pip install git+ssh://git@github.com/sintefore/neos4mosel.git
 ```
 
 ## Usage
 
-The package creates an executable/binary file `nemos`, which can be used as a solver in mosel models using the `nlsolv` model. The minimal code for using it in Mosel, assuming that the `nemos` binary is in the PATH, is:
+The package creates an executable/binary file `nemos`, which can be used as a solver in mosel models using the `nlsolv` package.
+The minimal code for using it in Mosel, assuming that the `nemos` binary is in the PATH, is:
 
 ```
 uses nlsolv
@@ -28,7 +30,7 @@ setparam("NL_solverpath", "nemos")  ! name of the solver binary - must be in PAT
 setparam("NL_binary", false)        ! NEOS XML does not work with the default binary format
 ```
 
-The last parameter is required because the XML format does not support model in binary format.
+The last parameter is required because the XML format does not support NL model files with binary format.
 Also note that names of Mosel parameters are not case sensitive, so "nl_solver" etc. works as well.
 
 Solver-specific parameters can be passed to the solver using
@@ -37,7 +39,7 @@ Solver-specific parameters can be passed to the solver using
 setparam("NL_options", SOLVER_OPTIONS)
 ```
 
-where `SOLVEROPTIONS` is a space-separated list of key=value entries.
+where `SOLVER_OPTIONS` is a space-separated list of key=value entries.
 In addition to the solver parameters, the list can include the following parameters for the `nemos` binary:
 
 - `category` - NEOS problem category, defaults to `milp`
@@ -94,4 +96,4 @@ nemos problem.nl
 and there should appear `problem.sol` in the same directory as `problem.nl`.
 Solver options can be provided using environmental variable `neos_options`.
 
-To avoid warning about wrong syntax of input arguments, add dummy options `-s -e` to the call.
+To avoid warning about wrong syntax of input arguments, add dummy arguments `-s -e` to the call.
